@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "FirstGO"
+rootProject.name = "ValoTrak"
 include(":app")
  
