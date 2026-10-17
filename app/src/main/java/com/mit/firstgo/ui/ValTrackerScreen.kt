@@ -1,6 +1,7 @@
 package com.mit.firstgo.ui
 
 import android.content.Context
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
@@ -29,6 +30,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,6 +69,19 @@ fun ValTrackerScreen() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("valorant_prefs", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
+
+    if (prefs.getBoolean("assets_preloaded", false)) {
+        AssetPreloader.done = true
+    }
+
+    if (!AssetPreloader.done) {
+        LaunchedEffect(Unit) {
+            AssetPreloader.preload(context)
+            prefs.edit().putBoolean("assets_preloaded", true).apply()
+        }
+        PreloadScreen(AssetPreloader.progress)
+        return
+    }
 
     var apiKey by remember { mutableStateOf(prefs.getString("api_key", "") ?: "") }
     var riotId by remember { mutableStateOf(prefs.getString("riot_id", "") ?: "") }
@@ -117,7 +132,7 @@ fun ValTrackerScreen() {
                     val accDef = async { ValApi.getAccount(name, tag, apiKey) }
                     val mmrDef = async { ValApi.getMmr(region.trim(), "pc", name, tag, apiKey) }
                     val histDef = async { ValApi.getMmrHistory(region.trim(), "pc", name, tag, apiKey) }
-                    val matchDef = async { ValApi.getMatches(region.trim(), "pc", name, tag, 8, apiKey) }
+                    val matchDef = async { ValApi.getMatches(region.trim(), "pc", name, tag, 20, apiKey) }
                     val accRes = accDef.await()
                     val mmrRes = mmrDef.await()
                     val histRes = histDef.await()
@@ -160,7 +175,7 @@ fun ValTrackerScreen() {
                     val accDef = async { ValApi.getAccount(name, tag, apiKey) }
                     val mmrDef = async { ValApi.getMmr(region.trim(), "pc", name, tag, apiKey) }
                     val histDef = async { ValApi.getMmrHistory(region.trim(), "pc", name, tag, apiKey) }
-                    val matchDef = async { ValApi.getMatches(region.trim(), "pc", name, tag, 8, apiKey) }
+                    val matchDef = async { ValApi.getMatches(region.trim(), "pc", name, tag, 20, apiKey) }
                     val accRes = accDef.await()
                     val mmrRes = mmrDef.await()
                     val histRes = histDef.await()
@@ -208,7 +223,15 @@ private fun InputScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(40.dp))
-            Text("ValoTrak", color = ValorantRed, fontSize = 34.sp, fontWeight = FontWeight.Black)
+            androidx.compose.foundation.Image(
+                painter = androidx.compose.ui.res.painterResource(id = com.mit.firstgo.R.drawable.logo),
+                contentDescription = "ValoTrak logo",
+                modifier = Modifier.fillMaxWidth().height(120.dp),
+            )
+            Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                Text("Valo", color = ValorantRed, fontSize = 30.sp, fontWeight = FontWeight.Black)
+                Text("Trak", color = TextPrimary, fontSize = 30.sp, fontWeight = FontWeight.Black)
+            }
             Text("Valorant Progress Tracker", color = TextSecondary, fontSize = 14.sp)
             Spacer(Modifier.height(8.dp))
 
@@ -260,7 +283,7 @@ private fun InputScreen(
                 }
             }
 
-            Text("Get a free HenrikDev key via their Discord #get-a-key", color = TextSecondary, fontSize = 11.sp)
+
         }
     }
 }
@@ -316,7 +339,17 @@ private fun ProfileScreen(
                 }
             }
 
+            var selectedTab by remember { mutableStateOf(0) }
+            val tabs = listOf("Overview", "Matches", "Stats", "Ranks")
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                tabs.forEachIndexed { i, t ->
+                    Surface(color = if (selectedTab == i) ValorantRed else CardBg, shape = RoundedCornerShape(10.dp), modifier = Modifier.clickableSafe { selectedTab = i }) {
+                        Text(t, color = Color.White, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                if (selectedTab == 0) {
                 // Rank card
                 if (mmr != null || account != null) {
                     Surface(color = CardBg, shape = RoundedCornerShape(20.dp), tonalElevation = 4.dp) {
@@ -357,6 +390,136 @@ private fun ProfileScreen(
                     }
                 }
 
+                    // Quick performance overview
+                    if (matches.isNotEmpty()) {
+                        val wins = matches.count { it.result == "WIN" }
+                        val losses = matches.count { it.result == "LOSS" }
+                        val kd = matches.mapNotNull { it.me?.kills }.sum().let { k ->
+                            val d = matches.mapNotNull { it.me?.deaths }.sum()
+                            if (d > 0) String.format("%.2f", k.toFloat() / d) else k.toString()
+                        }
+                        Surface(color = CardBg, shape = RoundedCornerShape(16.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column { Text("Recent", color = TextSecondary, fontSize = 11.sp); Text("$wins W / $losses L", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+                                Column { Text("K/D", color = TextSecondary, fontSize = 11.sp); Text(kd, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+                                Column { Text("Matches", color = TextSecondary, fontSize = 11.sp); Text("${matches.size}", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+                                Column { Text("Play time", color = TextSecondary, fontSize = 11.sp); Text(formatDuration(matches.mapNotNull { it.gameLengthSec }.sum()), color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+                            }
+                        }
+                    }
+                    // Top agent highlight
+                    matches.groupBy { it.me?.agent ?: "Unknown" }.maxByOrNull { it.value.size }?.let { (agent, ms) ->
+                        Surface(color = CardBg, shape = RoundedCornerShape(16.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                ms.first().me?.agentIcon?.let { icon ->
+                                    RemoteImage(url = icon, contentDescription = agent, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)))
+                                    Spacer(Modifier.width(12.dp))
+                                }
+                                Column {
+                                    Text("Most played agent", color = TextSecondary, fontSize = 11.sp)
+                                    Text(agent, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                    Text("${ms.size} games  •  ${ms.count { it.result == "WIN" }} wins", color = TextSecondary, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                    // Mini RR trend
+                    val rrVals = history.mapNotNull { it.rr }.reversed()
+                    if (rrVals.size >= 2) {
+                        Text("RR trend", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        RrChart(values = rrVals, modifier = Modifier.fillMaxWidth().height(180.dp), label = "RR")
+                    }
+                    // Peak rank
+                    mmr?.highestRank?.let { peak ->
+                        Surface(color = CardBg, shape = RoundedCornerShape(16.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column { Text("Peak rank", color = TextSecondary, fontSize = 11.sp); Text(peak, color = ValorantRed, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+                                mmr.peakSeason?.let { Text(it, color = TextSecondary, fontSize = 12.sp) }
+                            }
+                        }
+                    }
+                } // end overview
+                if (selectedTab == 2) {
+                // Match result summary
+                if (matches.isNotEmpty()) {
+                    val wins = matches.count { it.result == "WIN" }
+                    val losses = matches.count { it.result == "LOSS" }
+                    val draws = matches.count { it.result == "DRAW" }
+                    val kills = matches.mapNotNull { it.me?.kills }.sum()
+                    val deaths = matches.mapNotNull { it.me?.deaths }.sum()
+                    val assists = matches.mapNotNull { it.me?.assists }.sum()
+                    val hs = matches.mapNotNull { it.me?.headshots }.sum()
+                    val shots = matches.mapNotNull { (it.me?.headshots ?: 0) + (it.me?.bodyshots ?: 0) + (it.me?.legshots ?: 0) }.sum()
+                    val hsPct = if (shots > 0) hs * 100 / shots else 0
+                    val kd = if (deaths > 0) String.format("%.2f", kills.toFloat() / deaths) else kills.toString()
+                    Surface(color = CardBg, shape = RoundedCornerShape(16.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Recent Performance (${matches.size} matches)", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                StatCell("W", wins.toString(), Modifier.weight(1f))
+                                StatCell("L", losses.toString(), Modifier.weight(1f))
+                                StatCell("D", draws.toString(), Modifier.weight(1f))
+                                StatCell("K/D", kd, Modifier.weight(1f))
+                                StatCell("HS%", "$hsPct%", Modifier.weight(1f))
+                            }
+                            Text("K ${kills}  D ${deaths}  A ${assists}  HS ${hs}/${shots}", color = TextSecondary, fontSize = 11.sp)
+                            val kdTrend = matches.map { (it.me?.kills ?: 0).toFloat() }.reversed()
+                            if (kdTrend.size >= 2) {
+                                Spacer(Modifier.height(6.dp))
+                                Text("Kills per match", color = TextSecondary, fontSize = 11.sp)
+                                RrChart(values = kdTrend.map { it.toInt() }, modifier = Modifier.fillMaxWidth().height(140.dp))
+                            }
+                        }
+                    }
+                }
+
+                // Top agents
+                if (matches.isNotEmpty()) {
+                    val agentStats = matches.groupBy { it.me?.agent ?: "Unknown" }
+                        .mapValues { (_, ms) ->
+                            val g = ms.size
+                            val w = ms.count { it.result == "WIN" }
+                            val k = ms.mapNotNull { it.me?.kills }.sum()
+                            val d = ms.mapNotNull { it.me?.deaths }.sum()
+                            val a = ms.mapNotNull { it.me?.assists }.sum()
+                            val hs = ms.mapNotNull { it.me?.headshots }.sum()
+                            val shots = ms.mapNotNull { (it.me?.headshots ?: 0) + (it.me?.bodyshots ?: 0) + (it.me?.legshots ?: 0) }.sum()
+                            AgentStat(ms.first().me?.agent ?: "Unknown", ms.first().me?.agentIcon, g, w, k, d, a, hs, shots)
+                        }
+                        .values.sortedByDescending { it.games }
+                        .take(5)
+                    Surface(color = CardBg, shape = RoundedCornerShape(16.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Top Agents", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            val agentGames = agentStats.map { it.games.toFloat() }
+                            if (agentGames.size >= 2) {
+                                BarChart(values = agentGames, modifier = Modifier.fillMaxWidth().height(120.dp), maxValue = (agentGames.maxOrNull() ?: 1f))
+                                Spacer(Modifier.height(6.dp))
+                            }
+                            agentStats.forEach { ag ->
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    if (ag.icon != null) {
+                                        RemoteImage(url = ag.icon, contentDescription = ag.name, modifier = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)))
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    Column(Modifier.weight(1f)) {
+                                        Text(ag.name, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                        Text("${ag.games} games  ${ag.wins}W  KDA ${ag.kills}/${ag.deaths}/${ag.assists}", color = TextSecondary, fontSize = 11.sp)
+                                    }
+                                    val kd = if (ag.deaths > 0) String.format("%.2f", ag.kills.toFloat() / ag.deaths) else ag.kills.toString()
+                                    val hsPct = if (ag.shots > 0) ag.hs * 100 / ag.shots else 0
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text("K/D $kd", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Text("HS $hsPct%", color = TextSecondary, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                } // end stats
+                if (selectedTab == 3) {
                 // Act ranks (dropdown)
                 val seasonal = mmr?.seasonal ?: emptyList()
                 if (seasonal.isNotEmpty()) {
@@ -368,7 +531,10 @@ private fun ProfileScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text("Act Ranks (${seasonal.size})", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                Column {
+    Text("Act Ranks (${seasonal.size})", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+    mmr?.highestRank?.let { Text("Peak ever: $it${mmr.peakSeason?.let { s -> " ($s)" } ?: ""}", color = ValorantRed, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+}
                                 Text(if (expanded) "▲" else "▼", color = TextSecondary, fontSize = 14.sp)
                             }
                             if (expanded) {
@@ -379,7 +545,7 @@ private fun ProfileScreen(
                                                 Text(s.seasonName ?: s.seasonShort ?: "Act", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                                                 Text("${s.wins}W / ${s.games}G  •  ${s.endTier ?: "—"}", color = TextSecondary, fontSize = 12.sp)
                                                 if (s.actWins.isNotEmpty()) {
-                                                    Text("Peak: ${s.actWins.last()}", color = ValorantRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                    Text("Peak: ${s.actWins.last()}  (${s.actWins.size} act wins)", color = ValorantRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                                 }
                                             }
                                         }
@@ -390,25 +556,48 @@ private fun ProfileScreen(
                     }
                 }
 
+                } // end ranks (act)
+                if (selectedTab == 1) {
                 // Recent matches with mode filter dropdown
                 if (matches.isNotEmpty()) {
                     var modeFilter by remember { mutableStateOf("All") }
+                    var mapFilter by remember { mutableStateOf("All") }
                     var dropdownOpen by remember { mutableStateOf(false) }
+                    var mapDropdownOpen by remember { mutableStateOf(false) }
                     val modes = remember(matches) { listOf("All") + matches.mapNotNull { it.mode }.distinct() }
-                    val filtered = if (modeFilter == "All") matches else matches.filter { it.mode == modeFilter }
+                    val maps = remember(matches) { listOf("All") + matches.mapNotNull { it.map }.distinct() }
+                    val filtered = matches.filter { (modeFilter == "All" || it.mode == modeFilter) && (mapFilter == "All" || it.map == mapFilter) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text("Recent Matches", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                        Box {
-                            Surface(color = CardBg, shape = RoundedCornerShape(10.dp), modifier = Modifier.clickableSafe { dropdownOpen = !dropdownOpen }) {
-                                Text(modeFilter, color = TextPrimary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), fontSize = 12.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box {
+                                Surface(color = CardBg, shape = RoundedCornerShape(10.dp), modifier = Modifier.clickableSafe { dropdownOpen = !dropdownOpen }) {
+                                    Text(modeFilter, color = TextPrimary, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 11.sp)
+                                }
+                                if (dropdownOpen) {
+                                    Surface(color = CardBg, shape = RoundedCornerShape(10.dp), tonalElevation = 8.dp, modifier = Modifier.padding(top = 32.dp)) {
+                                        Column {
+                                            modes.forEach { md ->
+                                                Text(md, color = TextPrimary, modifier = Modifier
+                                                    .clickableSafe { modeFilter = md; dropdownOpen = false }
+                                                    .padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 11.sp)
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            if (dropdownOpen) {
-                                Surface(color = CardBg, shape = RoundedCornerShape(10.dp), tonalElevation = 8.dp, modifier = Modifier.padding(top = 36.dp)) {
-                                    Column {
-                                        modes.forEach { md ->
-                                            Text(md, color = TextPrimary, modifier = Modifier
-                                                .clickableSafe { modeFilter = md; dropdownOpen = false }
-                                                .padding(horizontal = 12.dp, vertical = 8.dp), fontSize = 12.sp)
+                            Box {
+                                Surface(color = CardBg, shape = RoundedCornerShape(10.dp), modifier = Modifier.clickableSafe { mapDropdownOpen = !mapDropdownOpen }) {
+                                    Text(mapFilter, color = TextPrimary, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 11.sp)
+                                }
+                                if (mapDropdownOpen) {
+                                    Surface(color = CardBg, shape = RoundedCornerShape(10.dp), tonalElevation = 8.dp, modifier = Modifier.padding(top = 32.dp)) {
+                                        Column {
+                                            maps.forEach { md ->
+                                                Text(md, color = TextPrimary, modifier = Modifier
+                                                    .clickableSafe { mapFilter = md; mapDropdownOpen = false }
+                                                    .padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 11.sp)
+                                            }
                                         }
                                     }
                                 }
@@ -420,10 +609,23 @@ private fun ProfileScreen(
                     }
                 }
 
+                } // end matches
+                if (selectedTab == 3) {
                 // RR history
                 if (history.isNotEmpty()) {
                     Text("RR History", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    history.take(10).forEach { h ->
+                    val rrValues = history.mapNotNull { it.rr }.reversed()
+                    if (rrValues.size >= 2) {
+                        RrChart(values = rrValues, modifier = Modifier.fillMaxWidth().height(180.dp))
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    val changeValues = history.mapNotNull { it.lastChange?.toFloat() }.reversed()
+                    if (changeValues.size >= 2) {
+                        Text("RR change per match", color = TextSecondary, fontSize = 11.sp)
+                        BarChart(values = changeValues, modifier = Modifier.fillMaxWidth().height(140.dp))
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    history.take(20).forEach { h ->
                         Surface(color = CardBg, shape = RoundedCornerShape(12.dp)) {
                             Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 if (h.mapId != null) {
@@ -447,6 +649,7 @@ private fun ProfileScreen(
                     }
                 }
 
+                } // end ranks (rr)
                 Spacer(Modifier.height(28.dp))
             }
         }
@@ -584,5 +787,125 @@ private fun formatDuration(sec: Int): String {
     val m = (sec % 3600) / 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
 }
+
+@Composable
+private fun PreloadScreen(progress: Float) {
+    Box(
+        modifier = Modifier.fillMaxSize().background(
+            Brush.verticalGradient(listOf(ValorantDarker, ValorantDark, Color(0xFF111D27)))
+        ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("ValoTrak", color = ValorantRed, fontSize = 34.sp, fontWeight = FontWeight.Black)
+            Text("Preparing assets...", color = TextSecondary, fontSize = 14.sp)
+            CircularProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.size(64.dp),
+                color = ValorantRed,
+                strokeWidth = 4.dp,
+            )
+            Text("${(progress * 100).toInt()}%", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text("Downloading maps, agents & ranks for offline use", color = TextSecondary, fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun RrChart(values: List<Int>, modifier: Modifier = Modifier, label: String = "RR") {
+    val minV = values.minOrNull() ?: 0
+    val maxV = values.maxOrNull() ?: 0
+    val range = (maxV - minV).coerceAtLeast(1)
+    Column(modifier) {
+        Text("$label  (max $maxV, min $minV)", color = TextSecondary, fontSize = 10.sp)
+        Canvas(modifier = Modifier.fillMaxWidth().height(150.dp).background(CardBg, RoundedCornerShape(12.dp)).padding(8.dp)) {
+        val padLeft = 40f
+        val padBottom = 24f
+        val w = size.width - padLeft
+        val h = size.height - padBottom
+        val stepX = if (values.size > 1) w / (values.size - 1) else w
+        // axes
+        drawLine(color = TextSecondary, start = androidx.compose.ui.geometry.Offset(padLeft, 0f), end = androidx.compose.ui.geometry.Offset(padLeft, h), strokeWidth = 2f)
+        drawLine(color = TextSecondary, start = androidx.compose.ui.geometry.Offset(padLeft, h), end = androidx.compose.ui.geometry.Offset(padLeft + w, h), strokeWidth = 2f)
+        // y labels
+        listOf(minV, (minV + maxV) / 2, maxV).forEach { v ->
+            val y = h - ((v - minV).toFloat() / range) * h
+        }
+        // x labels
+        values.forEachIndexed { i, _ ->
+            val x = padLeft + i * stepX
+        }
+        val path = androidx.compose.ui.graphics.Path()
+        values.forEachIndexed { i, v ->
+            val x = padLeft + i * stepX
+            val y = h - ((v - minV).toFloat() / range) * h
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        drawPath(path, color = WinGreen, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
+        values.forEachIndexed { i, v ->
+            val x = padLeft + i * stepX
+            val y = h - ((v - minV).toFloat() / range) * h
+            drawCircle(color = WinGreen, radius = 3f, center = androidx.compose.ui.geometry.Offset(x, y))
+        }
+    }
+    Text("matches 1..${values.size}", color = TextSecondary, fontSize = 10.sp)
+    }
+}
+
+@Composable
+private fun BarChart(
+    values: List<Float>,
+    colors: List<Color> = values.map { if (it >= 0) WinGreen else ValorantRed },
+    modifier: Modifier = Modifier,
+    maxValue: Float? = null,
+    label: String = "",
+) {
+    val max = maxValue ?: (values.maxOrNull() ?: 1f)
+    val min = if (maxValue == null) (values.minOrNull() ?: 0f) else 0f
+    val lo = min.coerceAtMost(0f)
+    val hi = max.coerceAtLeast(0f)
+    val range = (hi - lo).coerceAtLeast(1f)
+    Column(modifier) {
+        Text("$label  (max ${String.format("%.0f", max)}, min ${String.format("%.0f", min)})", color = TextSecondary, fontSize = 10.sp)
+        Canvas(modifier = Modifier.fillMaxWidth().height(150.dp).background(CardBg, RoundedCornerShape(12.dp)).padding(8.dp)) {
+        val padLeft = 36f
+        val padBottom = 20f
+        val w = size.width - padLeft
+        val h = size.height - padBottom
+        val barWidth = w / (values.size.coerceAtLeast(1) * 1.4f)
+        val gap = barWidth * 0.4f
+        val zero = h - ((0f - lo) / range) * h
+        // axes
+        drawLine(color = TextSecondary, start = androidx.compose.ui.geometry.Offset(padLeft, 0f), end = androidx.compose.ui.geometry.Offset(padLeft, h), strokeWidth = 2f)
+        drawLine(color = TextSecondary, start = androidx.compose.ui.geometry.Offset(padLeft, h), end = androidx.compose.ui.geometry.Offset(padLeft + w, h), strokeWidth = 2f)
+        // y labels
+        listOf(lo, (lo + hi) / 2f, hi).forEach { v ->
+            val y = h - ((v - lo) / range) * h
+        }
+        values.forEachIndexed { i, v ->
+            val x = padLeft + i * (barWidth + gap)
+            val y = h - ((v - lo) / range) * h
+            val top = if (v >= 0) y else zero
+            val barH = kotlin.math.abs(y - zero)
+            val color = colors.getOrElse(i) { if (v >= 0) WinGreen else ValorantRed }
+            drawRect(color = color, topLeft = androidx.compose.ui.geometry.Offset(x, top), size = androidx.compose.ui.geometry.Size(barWidth, barH.coerceAtLeast(2f)))
+        }
+        drawLine(color = TextSecondary, start = androidx.compose.ui.geometry.Offset(padLeft, zero), end = androidx.compose.ui.geometry.Offset(padLeft + w, zero), strokeWidth = 1f)
+    }
+    Text("bars 1..${values.size}", color = TextSecondary, fontSize = 10.sp)
+    }
+}
+
+private data class AgentStat(
+    val name: String,
+    val icon: String?,
+    val games: Int,
+    val wins: Int,
+    val kills: Int,
+    val deaths: Int,
+    val assists: Int,
+    val hs: Int,
+    val shots: Int,
+)
 
 private fun Modifier.clickableSafe(onClick: () -> Unit): Modifier = this.clickable(onClick = onClick)

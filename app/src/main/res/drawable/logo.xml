@@ -1,0 +1,17 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="240dp"
+    android:height="180dp"
+    android:viewportWidth="800"
+    android:viewportHeight="600">
+    <group android:scaleX="1.7" android:scaleY="1.7" android:pivotX="400" android:pivotY="280">
+    <!-- Outer tactical radar ring -->
+    <path android:pathData="M400,140 A140,140 0 1,0 400,420 A140,140 0 1,0 400,140" android:strokeColor="#2B3945" android:strokeWidth="6" android:fillColor="#00000000"/>
+    <path android:pathData="M400,180 A100,100 0 1,0 400,380 A100,100 0 1,0 400,180" android:strokeColor="#2B3945" android:strokeWidth="2" android:fillColor="#00000000"/>
+    <!-- Crosshair accents -->
+    <path android:pathData="M400,100 L400,130 M400,430 L400,460 M220,280 L250,280 M550,280 L580,280" android:strokeColor="#FF4655" android:strokeWidth="6" android:strokeLineCap="square" android:fillColor="#00000000"/>
+    <!-- T -->
+    <path android:pathData="M330,210 L470,210 M400,210 L400,290" android:strokeColor="#ECE8E1" android:strokeWidth="28" android:strokeLineJoin="miter" android:fillColor="#00000000"/>
+    <!-- V -->
+    <path android:pathData="M330,270 L400,370 L470,270" android:strokeColor="#FF4655" android:strokeWidth="28" android:strokeLineJoin="miter" android:fillColor="#00000000"/>
+  </group>
+</vector>

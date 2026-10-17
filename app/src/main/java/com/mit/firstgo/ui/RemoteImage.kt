@@ -12,23 +12,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
-
-private val imageCache = object {
-    private val map = LinkedHashMap<String, Bitmap>(64, 0.75f, true)
-    private val MAX = 80
-    @Synchronized fun get(url: String): Bitmap? = map[url]
-    @Synchronized fun put(url: String, bmp: Bitmap) {
-        if (map.size >= MAX) {
-            val it = map.entries.iterator()
-            if (it.hasNext()) { it.next(); it.remove() }
-        }
-        map[url] = bmp
-    }
-}
 
 @Composable
 fun RemoteImage(
@@ -37,12 +25,18 @@ fun RemoteImage(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Fit,
 ) {
-    var bitmap by remember(url) { mutableStateOf<Bitmap?>(imageCache.get(url ?: "")) }
+    val context = LocalContext.current
+    var bitmap by remember(url) { mutableStateOf<Bitmap?>(if (url.isNullOrBlank()) null else imageCache.get(url)) }
     var failed by remember(url) { mutableStateOf(false) }
 
     LaunchedEffect(url) {
         if (url.isNullOrBlank()) { failed = true; return@LaunchedEffect }
         imageCache.get(url)?.let { bitmap = it; return@LaunchedEffect }
+        getCachedBitmap(context, url)?.let { bmp ->
+            imageCache.put(url, bmp)
+            bitmap = bmp
+            return@LaunchedEffect
+        }
         withContext(Dispatchers.IO) {
             try {
                 val conn = URL(url).openConnection() as HttpURLConnection
@@ -56,6 +50,7 @@ fun RemoteImage(
                 conn.disconnect()
                 if (bmp != null) {
                     imageCache.put(url, bmp)
+                    putCachedBitmap(context, url, bmp)
                     bitmap = bmp
                 } else {
                     failed = true
