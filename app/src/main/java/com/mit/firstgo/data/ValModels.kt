@@ -93,3 +93,40 @@ data class MatchSummary(
         return when (w) { true -> "WIN"; false -> "LOSS"; else -> "DRAW" }
     }
 }
+
+data class LeaderboardEntry(
+    val rank: Int,
+    val name: String,
+    val tag: String,
+    val tierId: Int?,
+    val rr: Int?,
+    val wins: Int?,
+    val card: String?,
+    val puuid: String?,
+)
+
+data class SkinLevel(
+    val uuid: String,
+    val name: String,
+    val icon: String?,
+)
+
+data class StoreOffer(
+    val itemId: String,
+    val cost: Int?,
+)
+
+data class AgentAbility(
+    val name: String,
+    val icon: String?,
+)
+
+data class AgentInfo(
+    val name: String,
+    val description: String?,
+    val icon: String?,
+    val fullPortrait: String?,
+    val roleName: String?,
+    val roleIcon: String?,
+    val abilities: List<AgentAbility>,
+)

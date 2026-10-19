@@ -8,6 +8,9 @@ import java.net.URLEncoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/** Result of the lightweight API-key validity probe. */
+enum class KeyCheck { VALID, INVALID, NETWORK }
+
 object ValApi {
 
     private val seasonNameCache = mutableMapOf<String, String>()
@@ -317,12 +320,14 @@ object ValApi {
         tag: String,
         size: Int = 10,
         apiKey: String?,
+        start: Int = 0,
     ): Result<List<MatchSummary>> {
         // fetch account to get puuid for "me" detection
         val accRes = getAccount(name, tag, apiKey)
         val puuid = accRes.getOrNull()?.puuid
 
-        val url = "$BASE/valorant/v4/matches/${enc(region)}/${enc(platform)}/${enc(name)}/${enc(tag)}?size=$size"
+        var url = "$BASE/valorant/v4/matches/${enc(region)}/${enc(platform)}/${enc(name)}/${enc(tag)}?size=$size"
+        if (start > 0) url += "&start=$start"
         val res = get(url, apiKey)
         if (res.isFailure) return Result.failure(res.exceptionOrNull()!!)
         return try {
@@ -353,6 +358,217 @@ object ValApi {
             Result.success(parseMatch(data, playerPuuid))
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    // ---------- Extended endpoints ----------
+
+    /** Key probe result: only 401/403 mean the key is rejected. Anything else (404, 5xx, net errors) is not a key problem. */
+    suspend fun checkKey(apiKey: String?): KeyCheck = withContext(Dispatchers.IO) {
+        if (apiKey.isNullOrBlank()) return@withContext KeyCheck.NETWORK
+        try {
+            var code = probe("$BASE/valorant/v1/game-version", apiKey)
+            if (code in 200..299) return@withContext KeyCheck.VALID
+            if (code in 401..403) return@withContext KeyCheck.INVALID
+            // fall back to a second route before deciding
+            code = probe("$BASE/valorant/v3/leaderboard/pc/eu?size=1", apiKey)
+            when {
+                code in 200..299 -> KeyCheck.VALID
+                code in 401..403 -> KeyCheck.INVALID
+                code == 404 || code == 400 -> KeyCheck.VALID // key authenticated, route just has no data
+                else -> KeyCheck.NETWORK
+            }
+        } catch (_: Exception) {
+            KeyCheck.NETWORK
+        }
+    }
+
+    private fun probe(url: String, apiKey: String): Int {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 10000
+        conn.readTimeout = 10000
+        conn.setRequestProperty("Authorization", apiKey.trim())
+        conn.setRequestProperty("User-Agent", "ValoTrak/1.0")
+        val code = conn.responseCode
+        conn.disconnect()
+        return code
+    }
+
+    /** Leaderboard v3: top players for a region/platform. */
+    suspend fun getLeaderboard(
+        region: String,
+        platform: String = "pc",
+        page: Int = 1,
+        size: Int = 100,
+        name: String? = null,
+        tag: String? = null,
+        apiKey: String?,
+    ): Result<List<LeaderboardEntry>> {
+        var url = "$BASE/valorant/v3/leaderboard/${enc(region)}/${enc(platform)}?size=$size&page=$page"
+        if (!name.isNullOrBlank() && !tag.isNullOrBlank()) {
+            url += "&name=${enc(name)}&tag=${enc(tag)}"
+        }
+        val res = get(url, apiKey)
+        if (res.isFailure) return Result.failure(res.exceptionOrNull()!!)
+        return try {
+            val root = JSONObject(res.getOrThrow())
+            val data = root.optJSONObject("data") ?: JSONObject()
+            val players = data.optJSONArray("players") ?: JSONArray()
+            val list = ArrayList<LeaderboardEntry>(players.length())
+            for (i in 0 until players.length()) {
+                val o = players.getJSONObject(i)
+                val entryRank = o.optNullableInt("leaderboard_rank")
+                val tierId = o.optNullableInt("tier")
+                list.add(
+                    LeaderboardEntry(
+                        rank = entryRank ?: (i + 1),
+                        name = o.optString("name"),
+                        tag = o.optString("tag"),
+                        tierId = tierId,
+                        rr = o.optNullableInt("rr"),
+                        wins = o.optNullableInt("wins"),
+                        card = o.optString("card").optStringOrNull(),
+                        puuid = o.optString("puuid").optStringOrNull(),
+                    )
+                )
+            }
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** Cache of skin level uuid -> name/icon, fetched once from valorant-api. */
+    private val skinLevelCache = mutableMapOf<String, SkinLevel>()
+
+    suspend fun loadSkinLevels(): Map<String, SkinLevel> {
+        if (skinLevelCache.isNotEmpty()) return skinLevelCache
+        try {
+            val res = get("https://valorant-api.com/v1/weapons/skinlevels?language=en-US", null)
+            if (res.isSuccess) {
+                val root = JSONObject(res.getOrThrow())
+                val data = root.optJSONArray("data") ?: JSONArray()
+                for (i in 0 until data.length()) {
+                    val o = data.getJSONObject(i)
+                    val uuid = o.optString("uuid")
+                    val name = o.optString("name").optStringOrNull() ?: continue
+                    if (uuid.isNotBlank()) {
+                        skinLevelCache[uuid] = SkinLevel(uuid, name, o.optString("displayIcon").optStringOrNull())
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        return skinLevelCache
+    }
+
+    /** Current game/client version (e.g. "release-10.08-shipping-..."), needed for Riot store headers. */
+    private var gameVersionCache: String? = null
+
+    suspend fun getGameVersion(apiKey: String?): String? {
+        gameVersionCache?.let { return it }
+        return withContext(Dispatchers.IO) {
+            try {
+                val res = get("$BASE/valorant/v1/game-version", apiKey)
+                if (res.isSuccess) {
+                    val data = JSONObject(res.getOrThrow()).optJSONObject("data") ?: JSONObject()
+                    // Prefer an explicit riotClientVersion, else any "release-..." string.
+                    var v = data.optString("riotClientVersion").takeIf { it.startsWith("release-") }
+                    if (v == null) {
+                        v = data.optString("version").takeIf { it.startsWith("release-") }
+                    }
+                    if (v == null) {
+                        val keys = data.keys()
+                        while (keys.hasNext()) {
+                            val cand = data.optString(keys.next().toString())
+                            if (cand.startsWith("release-")) { v = cand; break }
+                        }
+                    }
+                    gameVersionCache = v
+                }
+                gameVersionCache
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
+    /** Global store offers (weapon skins currently being offered). Wallet is not available in public API v4. */
+    suspend fun getStoreOffers(apiKey: String?): Result<List<StoreOffer>> {
+        val res = get("$BASE/valorant/v1/store-offers", apiKey)
+        if (res.isFailure) return Result.failure(res.exceptionOrNull()!!)
+        return try {
+            val root = JSONObject(res.getOrThrow())
+            val data = root.optJSONObject("data") ?: JSONObject()
+            val offers = data.optJSONArray("Offers") ?: JSONArray()
+            val skinType = "e5cdd41a-4398-4e02-8f81-c9206df6d9f9"
+            val list = ArrayList<StoreOffer>(offers.length())
+            for (i in 0 until offers.length()) {
+                val o = offers.getJSONObject(i)
+                if (!o.optBoolean("IsDirectPurchase", false)) continue
+                val rewards = o.optJSONArray("Rewards") ?: JSONArray()
+                if (rewards.length() == 0) continue
+                val r = rewards.getJSONObject(0)
+                val type = r.optString("ItemTypeID")
+                val item = r.optString("ItemID")
+                if (type != skinType || item.isNullOrBlank()) continue
+                val costObj = o.optJSONObject("Cost")
+                var cost: Int? = null
+                if (costObj != null) {
+                    // VP currency uuid first, fallback to any entry
+                    val vpKey = "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741"
+                    cost = costObj.optNullableInt(vpKey)
+                    if (cost == null) {
+                        val keys = costObj.keys()
+                        while (keys.hasNext()) { cost = costObj.optNullableInt(keys.next().toString()); if (cost != null) break }
+                    }
+                }
+                list.add(StoreOffer(item, cost))
+            }
+            Result.success(list.distinctBy { it.itemId })
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private val agentsCache = mutableMapOf<String, AgentInfo>()
+
+    /** Playable agents from valorant-api.com (no key needed). */
+    suspend fun getAgents(): Result<List<AgentInfo>> {
+        if (agentsCache.isNotEmpty()) return Result.success(agentsCache.values.toList())
+        val res = get("https://valorant-api.com/v1/agents?isPlayableCharacter=true&language=en-US", null)
+        if (res.isFailure) return Result.failure(res.exceptionOrNull()!!)
+        try {
+            val root = JSONObject(res.getOrThrow())
+            val data = root.optJSONArray("data") ?: JSONArray()
+            for (i in 0 until data.length()) {
+                val o = data.getJSONObject(i)
+                val name = o.optString("displayName").optStringOrNull() ?: continue
+                val role = o.optJSONObject("role")
+                val abilities = ArrayList<AgentAbility>()
+                val abArr = o.optJSONArray("abilities") ?: JSONArray()
+                for (j in 0 until abArr.length()) {
+                    val a = abArr.getJSONObject(j)
+                    abilities.add(
+                        AgentAbility(
+                            name = a.optString("displayName").optStringOrNull() ?: continue,
+                            icon = a.optString("displayIcon").optStringOrNull(),
+                        )
+                    )
+                }
+                agentsCache[name] = AgentInfo(
+                    name = name,
+                    description = o.optString("description").optStringOrNull(),
+                    icon = o.optString("displayIcon").optStringOrNull(),
+                    fullPortrait = o.optString("fullPortrait").optStringOrNull(),
+                    roleName = role?.optString("displayName")?.optStringOrNull(),
+                    roleIcon = role?.optString("displayIcon")?.optStringOrNull(),
+                    abilities = abilities,
+                )
+            }
+            return Result.success(agentsCache.values.sortedBy { it.name }.toList())
+        } catch (e: Exception) {
+            return Result.failure(e)
         }
     }
 }
